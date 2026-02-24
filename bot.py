@@ -33,8 +33,11 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
     if member.status not in ["member", "administrator", "creator"]:
-        await update.callback_query.answer("❌ اول عضو کانال شو!", show_alert=True)
-        return
+        
+        await update.callback_query.answer(
+    "❌ اول عضو کانال شو!\n\n🔗 https://t.me/Wolfrobat1382",
+    show_alert=True
+        )
 
     if user.id not in players:
         players.append(user.id)
