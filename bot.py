@@ -40,12 +40,12 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME,
-     
-    await query.answer(
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+
+        await query.answer(
     "❌ لطفاً اول عضو کانال شو 👇",
     url="https://t.me/Wolfrobat1382"
-      )                                             
+        )
 
     except Exception:
         await query.answer("❌ خطا در بررسی عضویت کانال", show_alert=True)
