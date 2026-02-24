@@ -44,7 +44,7 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer(
     "❌ لطفاً اول عضو کانال شو 👇",
-    url="https://t.me/Wolfrobat1382"
+    url="@Wolfrobat1382"
         )
 
     except Exception:
