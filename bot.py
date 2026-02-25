@@ -1,174 +1,166 @@
 import os
 import random
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "@Wolfrobat1382"
 
-players = []
-scores = {}
-current_index = 0
-game_active = False
-turn_task = None
+games = {}
 
-TURN_TIME = 30  # تایمر هر نوبت (ثانیه)
+TURN_TIME = 30
 
 truths = [
-    "بزرگ‌ترین دروغی که گفتی چی بوده؟",
-    "بدترین سوتی زندگیت چی بوده؟",
+    "بزرگ‌ترین دروغت چی بوده؟",
     "آخرین باری که گریه کردی کی بود؟",
-    "اگه نامرئی میشدی چیکار میکردی؟"
+    "بدترین سوتی زندگیت چی بوده؟",
 ]
 
 dares = [
     "یه ویس خنده‌دار بفرست 😂",
     "۱۰ دقیقه اسمتو بذار گرگ 🐺",
-    "به یه نفر تو گروه بگو دوستش داری 😎",
-    "یه استیکر عجیب بفرست 😈"
+    "به یکی از اعضا بگو دوستش داری 😎",
+]
+
+punishments = [
+    "حکم: یه استیکر خنده‌دار بفرست 😂",
+    "حکم: اسم پروفایلتو ۵ دقیقه بذار بازنده 😈",
+    "حکم: یه پیام با ۱۰ تا ایموجی بفرست 🔥"
 ]
 
 # ---------------- START ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🎮 ورود به بازی", callback_data="join")]]
     await update.message.reply_text(
-        "🐺 بازی جرئت یا حقیقت\n\nحداقل ۲ نفر لازمه 👇",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "🐺 بازی جرئت یا حقیقت\n\n"
+        "برای ورود بنویس: join\n"
+        "برای پایان: end\n"
+        "حداقل ۲ نفر لازم است."
     )
-
-# ---------------- CHECK MEMBERSHIP ---------------- #
-
-async def is_member(user_id, context):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
 
 # ---------------- JOIN ---------------- #
 
-async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global players, scores, game_active
+async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
 
-    query = update.callback_query
-    user = query.from_user
-    await query.answer()
+    if chat_id not in games:
+        games[chat_id] = {
+            "players": [],
+            "scores": {},
+            "current": 0,
+            "active": False,
+            "waiting": False
+        }
 
-    if not await is_member(user.id, context):
-        keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url="https://t.me/Wolfrobat1382")]]
-        await query.message.reply_text("❌ اول عضو کانال شو 👇", reply_markup=InlineKeyboardMarkup(keyboard))
+    game = games[chat_id]
+
+    if user.id in game["players"]:
+        await update.message.reply_text("قبلاً وارد شدی 😎")
         return
 
-    if user.id in players:
-        await query.message.reply_text("⚡ قبلاً وارد شدی!")
+    if len(game["players"]) >= 8:
+        await update.message.reply_text("ظرفیت پر شده (حداکثر ۸ نفر)")
         return
 
-    if len(players) >= 8:
-        await query.message.reply_text("🚫 ظرفیت بازی پر شده (حداکثر ۸ نفر)")
-        return
+    game["players"].append(user.id)
+    game["scores"][user.id] = 0
 
-    players.append(user.id)
-    scores[user.id] = 0
+    await update.message.reply_text(
+        f"{user.first_name} وارد بازی شد 👥 ({len(game['players'])})"
+    )
 
-    await query.message.reply_text(f"✅ {user.first_name} وارد بازی شد!\n👥 تعداد: {len(players)}")
-
-    if len(players) >= 2 and not game_active:
-        game_active = True
-        await start_round(query, context)
+    if len(game["players"]) >= 2 and not game["active"]:
+        game["active"] = True
+        await start_round(chat_id, context)
 
 # ---------------- START ROUND ---------------- #
 
-async def start_round(query, context):
-    global current_index, turn_task
+async def start_round(chat_id, context):
+    game = games[chat_id]
 
-    if not players:
+    if not game["players"]:
         return
 
-    player_id = players[current_index]
+    player_id = game["players"][game["current"]]
     user = await context.bot.get_chat(player_id)
 
     choice = random.choice(["truth", "dare"])
     question = random.choice(truths if choice == "truth" else dares)
 
-    text = f"🎯 نوبت: {user.first_name}\n\n⏳ {TURN_TIME} ثانیه وقت داری!\n\n{'❓ حقیقت' if choice == 'truth' else '😈 جرئت'}:\n{question}"
+    game["waiting"] = True
 
-    keyboard = [
-        [InlineKeyboardButton("✅ انجام دادم", callback_data="done")],
-        [InlineKeyboardButton("➡ رد کردن", callback_data="skip")],
-        [InlineKeyboardButton("📊 امتیازات", callback_data="scores")],
-        [InlineKeyboardButton("🛑 پایان بازی", callback_data="end")]
-    ]
+    await context.bot.send_message(
+        chat_id,
+        f"🎯 نوبت {user.first_name}\n"
+        f"⏳ {TURN_TIME} ثانیه وقت داری!\n\n"
+        f"{'❓ حقیقت' if choice=='truth' else '😈 جرئت'}:\n{question}"
+    )
 
-    await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    asyncio.create_task(turn_timeout(chat_id, context))
 
-    turn_task = asyncio.create_task(turn_timeout(context))
+# ---------------- TIMEOUT ---------------- #
 
-# ---------------- TURN TIMEOUT ---------------- #
-
-async def turn_timeout(context):
-    global current_index
+async def turn_timeout(chat_id, context):
     await asyncio.sleep(TURN_TIME)
-    await next_player(context)
 
-# ---------------- NEXT PLAYER ---------------- #
+    game = games.get(chat_id)
+    if not game or not game["waiting"]:
+        return
 
-async def next_player(context):
-    global current_index
-    current_index = (current_index + 1) % len(players)
+    player_id = game["players"][game["current"]]
+    punishment = random.choice(punishments)
 
-# ---------------- DONE ---------------- #
+    await context.bot.send_message(
+        chat_id,
+        f"⛔ وقت تموم شد!\n{punishment}"
+    )
 
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global scores
-    query = update.callback_query
-    await query.answer()
+    game["waiting"] = False
+    game["current"] = (game["current"] + 1) % len(game["players"])
+    await start_round(chat_id, context)
 
-    player_id = players[current_index]
-    scores[player_id] += 1
+# ---------------- HANDLE MESSAGE ---------------- #
 
-    await query.message.reply_text("🔥 آفرین! +1 امتیاز گرفتی")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
 
-    await next_player(context)
-    await start_round(query, context)
+    if chat_id not in games:
+        return
 
-# ---------------- SKIP ---------------- #
+    game = games[chat_id]
 
-async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("⛔ نوبت رد شد")
+    if not game["active"] or not game["waiting"]:
+        return
 
-    await next_player(context)
-    await start_round(query, context)
+    current_player = game["players"][game["current"]]
 
-# ---------------- SHOW SCORES ---------------- #
+    if user.id != current_player:
+        return
 
-async def show_scores(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    # اگه پیام داد یعنی انجام داده
+    game["scores"][user.id] += 1
+    game["waiting"] = False
 
-    text = "📊 امتیازات:\n\n"
-    for uid, score in scores.items():
-        user = await context.bot.get_chat(uid)
-        text += f"{user.first_name}: {score}\n"
+    await update.message.reply_text("🔥 آفرین! +1 امتیاز گرفتی")
 
-    await query.message.reply_text(text)
+    game["current"] = (game["current"] + 1) % len(game["players"]]
+    await start_round(chat_id, context)
 
-# ---------------- END GAME ---------------- #
+# ---------------- END ---------------- #
 
-async def end_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global players, scores, current_index, game_active
-
-    query = update.callback_query
-    await query.answer()
-
-    players = []
-    scores = {}
-    current_index = 0
-    game_active = False
-
-    await query.message.reply_text("🛑 بازی پایان یافت!\n/start برای شروع دوباره")
+async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id in games:
+        del games[chat_id]
+    await update.message.reply_text("🛑 بازی پایان یافت.\n/start برای شروع دوباره")
 
 # ---------------- MAIN ---------------- #
 
@@ -176,11 +168,9 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(join_game, pattern="join"))
-    app.add_handler(CallbackQueryHandler(done, pattern="done"))
-    app.add_handler(CallbackQueryHandler(skip, pattern="skip"))
-    app.add_handler(CallbackQueryHandler(show_scores, pattern="scores"))
-    app.add_handler(CallbackQueryHandler(end_game, pattern="end"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^join$"), join))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^end$"), end))
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     app.run_polling()
 
