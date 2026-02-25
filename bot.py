@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "Wolfrobat1382"  # بدون @ بهتر کار میکنه
+CHANNEL_USERNAME = "@Wolfrobat1382"
 
 players = []
 
@@ -16,25 +16,29 @@ truths = [
 
 dares = [
     "یه ویس خنده‌دار بفرست 😂",
-    "۱۰ دقیقه اسم خودتو عوض کن به گرگ 🐺",
-    "یه جمله عاشقانه به نفر سمت راستت بگو 😎"
+    "۱۰ دقیقه اسمتو بذار گرگ 🐺",
+    "یه جمله عاشقانه بگو 😎"
 ]
 
 # ---------------- START ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🎮 شروع بازی", callback_data="join")],
-        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME}")]
-    ]
-
+    keyboard = [[InlineKeyboardButton("🎮 شروع بازی", callback_data="join")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if update.message:
-        await update.message.reply_text(
-            "🐺 به Wolf Robat خوش اومدی\n\nقبل شروع بازی عضو کانال شو 👇",
-            reply_markup=reply_markup
-        )
+    await update.message.reply_text(
+        "🐺 به Wolf Robat خوش اومدی\n\nبرای شروع روی دکمه بزن 👇",
+        reply_markup=reply_markup
+    )
+
+# ---------------- CHECK MEMBERSHIP ---------------- #
+
+async def is_member(user_id, context):
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
 
 # ---------------- JOIN GAME ---------------- #
 
@@ -44,28 +48,21 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
 
-    # چک عضویت با URL ساده (بدون get_chat_member که خطا میده)
-    keyboard = [
-        [InlineKeyboardButton("✅ عضو شدم", callback_data="check")],
-        [InlineKeyboardButton("📢 رفتن به کانال", url=f"https://t.me/{CHANNEL_USERNAME}")]
-    ]
-
     await query.answer()
-    await query.message.reply_text(
-        "برای ورود به بازی اول عضو کانال شو 👇",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
-# ---------------- CHECK BUTTON ---------------- #
-
-async def check_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user = query.from_user
+    if not await is_member(user.id, context):
+        keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url="https://t.me/Wolfrobat1382")]]
+        await query.message.reply_text(
+            "❌ برای ورود باید عضو کانال باشی 👇",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
 
     if user.id not in players:
         players.append(user.id)
-
-    await query.answer("✅ وارد بازی شدی!")
+        await query.message.reply_text("✅ وارد بازی شدی!")
+    else:
+        await query.message.reply_text("⚡ قبلاً وارد شدی!")
 
     if len(players) >= 4:
         await start_round(query)
@@ -73,15 +70,14 @@ async def check_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- START ROUND ---------------- #
 
 async def start_round(query):
-    player = random.choice(players)
     choice = random.choice(["truth", "dare"])
 
     if choice == "truth":
         question = random.choice(truths)
-        text = f"🎯 نوبت بازیکن\n❓ حقیقت:\n{question}"
+        text = f"🎯 حقیقت:\n{question}"
     else:
         question = random.choice(dares)
-        text = f"🔥 نوبت بازیکن\n😈 جرئت:\n{question}"
+        text = f"🔥 جرئت:\n{question}"
 
     await query.message.reply_text(text)
 
@@ -92,7 +88,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(join_game, pattern="join"))
-    app.add_handler(CallbackQueryHandler(check_member, pattern="check"))
 
     app.run_polling()
 
