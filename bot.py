@@ -13,7 +13,6 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 games = {}
-
 TURN_TIME = 30
 
 truths = [
@@ -34,17 +33,15 @@ punishments = [
     "حکم: یه پیام با ۱۰ تا ایموجی بفرست 🔥"
 ]
 
-# ---------------- START ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🐺 بازی جرئت یا حقیقت\n\n"
         "برای ورود بنویس: join\n"
-        "برای پایان: end\n"
+        "برای پایان بنویس: end\n"
         "حداقل ۲ نفر لازم است."
     )
 
-# ---------------- JOIN ---------------- #
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -56,7 +53,7 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "scores": {},
             "current": 0,
             "active": False,
-            "waiting": False
+            "waiting": False,
         }
 
     game = games[chat_id]
@@ -80,7 +77,6 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         game["active"] = True
         await start_round(chat_id, context)
 
-# ---------------- START ROUND ---------------- #
 
 async def start_round(chat_id, context):
     game = games[chat_id]
@@ -105,7 +101,6 @@ async def start_round(chat_id, context):
 
     asyncio.create_task(turn_timeout(chat_id, context))
 
-# ---------------- TIMEOUT ---------------- #
 
 async def turn_timeout(chat_id, context):
     await asyncio.sleep(TURN_TIME)
@@ -124,9 +119,9 @@ async def turn_timeout(chat_id, context):
 
     game["waiting"] = False
     game["current"] = (game["current"] + 1) % len(game["players"])
+
     await start_round(chat_id, context)
 
-# ---------------- HANDLE MESSAGE ---------------- #
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -145,16 +140,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id != current_player:
         return
 
-    # اگه پیام داد یعنی انجام داده
     game["scores"][user.id] += 1
     game["waiting"] = False
 
     await update.message.reply_text("🔥 آفرین! +1 امتیاز گرفتی")
 
-    game["current"] = (game["current"] + 1) % len(game["players"]]
+    game["current"] = (game["current"] + 1) % len(game["players"])
+
     await start_round(chat_id, context)
 
-# ---------------- END ---------------- #
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -162,7 +156,6 @@ async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del games[chat_id]
     await update.message.reply_text("🛑 بازی پایان یافت.\n/start برای شروع دوباره")
 
-# ---------------- MAIN ---------------- #
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -173,6 +166,7 @@ def main():
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
