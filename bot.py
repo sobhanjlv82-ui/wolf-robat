@@ -1,169 +1,214 @@
 import os
 import random
 import asyncio
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-games = {}
+rooms = {}
 TURN_TIME = 30
 
 truths = [
-    "بزرگ‌ترین دروغت چی بوده؟",
-    "آخرین باری که گریه کردی کی بود؟",
+    "بزرگ‌ترین دروغی که گفتی چی بوده؟",
     "بدترین سوتی زندگیت چی بوده؟",
+    "آخرین باری که گریه کردی کی بود؟",
 ]
 
 dares = [
     "یه ویس خنده‌دار بفرست 😂",
     "۱۰ دقیقه اسمتو بذار گرگ 🐺",
-    "به یکی از اعضا بگو دوستش داری 😎",
+    "به یکی بگو دوستش داری 😎",
 ]
 
 punishments = [
-    "حکم: یه استیکر خنده‌دار بفرست 😂",
-    "حکم: اسم پروفایلتو ۵ دقیقه بذار بازنده 😈",
-    "حکم: یه پیام با ۱۰ تا ایموجی بفرست 🔥"
+    "حکم: یه استیکر بفرست 😈",
+    "حکم: یه پیام با ۱۰ ایموجی بفرست 🔥",
 ]
 
 
+# ================= START ================= #
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🎮 ساخت اتاق", callback_data="create_room")],
+        [InlineKeyboardButton("🔑 ورود به اتاق", callback_data="join_room")],
+    ]
+
     await update.message.reply_text(
-        "🐺 بازی جرئت یا حقیقت\n\n"
-        "برای ورود بنویس: join\n"
-        "برای پایان بنویس: end\n"
-        "حداقل ۲ نفر لازم است."
+        "🐺 بازی جرئت یا حقیقت\n\nیکی از گزینه‌ها رو انتخاب کن 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+# ================= CREATE ROOM ================= #
+
+async def create_room(update: Update, context):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+
+    room_id = str(random.randint(1000, 9999))
+
+    rooms[room_id] = {
+        "players": [user.id],
+        "scores": {user.id: 0},
+        "current": 0,
+        "waiting": False,
+    }
+
+    keyboard = [
+        [InlineKeyboardButton("📩 دعوت دوست", url=f"https://t.me/{context.bot.username}?start={room_id}")],
+        [InlineKeyboardButton("🚀 شروع بازی", callback_data=f"start_{room_id}")],
+    ]
+
+    await query.message.reply_text(
+        f"🎮 اتاق ساخته شد!\n\nکد: {room_id}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+# ================= JOIN ROOM ================= #
+
+async def join_room(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text("🔑 لطفاً کد اتاق را بفرست:\n/start 1234")
+
+
+# ================= HANDLE START WITH ROOM ================= #
+
+async def start_with_room(update: Update, context):
+    room_id = context.args[0] if context.args else None
     user = update.effective_user
 
-    if chat_id not in games:
-        games[chat_id] = {
-            "players": [],
-            "scores": {},
-            "current": 0,
-            "active": False,
-            "waiting": False,
-        }
-
-    game = games[chat_id]
-
-    if user.id in game["players"]:
-        await update.message.reply_text("قبلاً وارد شدی 😎")
+    if not room_id or room_id not in rooms:
+        await update.message.reply_text("❌ اتاق پیدا نشد.")
         return
 
-    if len(game["players"]) >= 8:
-        await update.message.reply_text("ظرفیت پر شده (حداکثر ۸ نفر)")
-        return
+    room = rooms[room_id]
 
-    game["players"].append(user.id)
-    game["scores"][user.id] = 0
+    if user.id not in room["players"]:
+        room["players"].append(user.id)
+        room["scores"][user.id] = 0
 
-    await update.message.reply_text(
-        f"{user.first_name} وارد بازی شد 👥 ({len(game['players'])})"
-    )
+    await update.message.reply_text("✅ وارد اتاق شدی!")
 
-    if len(game["players"]) >= 2 and not game["active"]:
-        game["active"] = True
-        await start_round(chat_id, context)
+    if len(room["players"]) >= 2:
+        await start_round(room_id, context)
 
 
-async def start_round(chat_id, context):
-    game = games[chat_id]
+# ================= START ROUND ================= #
 
-    if not game["players"]:
-        return
-
-    player_id = game["players"][game["current"]]
+async def start_round(room_id, context):
+    room = rooms[room_id]
+    player_id = room["players"][room["current"]]
     user = await context.bot.get_chat(player_id)
 
     choice = random.choice(["truth", "dare"])
     question = random.choice(truths if choice == "truth" else dares)
 
-    game["waiting"] = True
+    room["waiting"] = True
 
-    await context.bot.send_message(
-        chat_id,
-        f"🎯 نوبت {user.first_name}\n"
-        f"⏳ {TURN_TIME} ثانیه وقت داری!\n\n"
+    text = (
+        f"🎯 نوبت: {user.first_name}\n"
+        f"⏳ {TURN_TIME} ثانیه وقت داری\n\n"
         f"{'❓ حقیقت' if choice=='truth' else '😈 جرئت'}:\n{question}"
     )
 
-    asyncio.create_task(turn_timeout(chat_id, context))
+    keyboard = [
+        [InlineKeyboardButton("✅ انجام شد", callback_data=f"done_{room_id}")],
+        [InlineKeyboardButton("❌ انجام نشد", callback_data=f"fail_{room_id}")],
+        [InlineKeyboardButton("📊 امتیازات", callback_data=f"scores_{room_id}")],
+    ]
+
+    await context.bot.send_message(
+        room_id if room_id.startswith("-") else player_id,
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+    asyncio.create_task(turn_timeout(room_id, context))
 
 
-async def turn_timeout(chat_id, context):
+# ================= TIMEOUT ================= #
+
+async def turn_timeout(room_id, context):
     await asyncio.sleep(TURN_TIME)
 
-    game = games.get(chat_id)
-    if not game or not game["waiting"]:
+    room = rooms.get(room_id)
+    if not room or not room["waiting"]:
         return
 
-    player_id = game["players"][game["current"]]
     punishment = random.choice(punishments)
 
     await context.bot.send_message(
-        chat_id,
-        f"⛔ وقت تموم شد!\n{punishment}"
+        room_id,
+        f"⛔ وقت تموم شد!\n{punishment}",
     )
 
-    game["waiting"] = False
-    game["current"] = (game["current"] + 1) % len(game["players"])
+    room["waiting"] = False
+    room["current"] = (room["current"] + 1) % len(room["players"])
 
-    await start_round(chat_id, context)
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-
-    if chat_id not in games:
-        return
-
-    game = games[chat_id]
-
-    if not game["active"] or not game["waiting"]:
-        return
-
-    current_player = game["players"][game["current"]]
-
-    if user.id != current_player:
-        return
-
-    game["scores"][user.id] += 1
-    game["waiting"] = False
-
-    await update.message.reply_text("🔥 آفرین! +1 امتیاز گرفتی")
-
-    game["current"] = (game["current"] + 1) % len(game["players"])
-
-    await start_round(chat_id, context)
+    await start_round(room_id, context)
 
 
-async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if chat_id in games:
-        del games[chat_id]
-    await update.message.reply_text("🛑 بازی پایان یافت.\n/start برای شروع دوباره")
+# ================= CALLBACK HANDLER ================= #
 
+async def button_handler(update: Update, context):
+    query = update.callback_query
+    data = query.data
+
+    if data == "create_room":
+        await create_room(update, context)
+
+    elif data == "join_room":
+        await join_room(update, context)
+
+    elif data.startswith("done_"):
+        room_id = data.split("_")[1]
+        room = rooms.get(room_id)
+
+        if room:
+            user_id = query.from_user.id
+            room["scores"][user_id] += 1
+            room["waiting"] = False
+            await query.message.reply_text("🔥 +1 امتیاز گرفتی!")
+            await start_round(room_id, context)
+
+    elif data.startswith("fail_"):
+        room_id = data.split("_")[1]
+        await query.message.reply_text("😈 حکم اجرا میشه!")
+
+    elif data.startswith("scores_"):
+        room_id = data.split("_")[1]
+        room = rooms.get(room_id)
+
+        text = "📊 امتیازات:\n\n"
+        for uid, score in room["scores"].items():
+            user = await context.bot.get_chat(uid)
+            text += f"{user.first_name}: {score}\n"
+
+        await query.message.reply_text(text)
+
+
+# ================= MAIN ================= #
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^join$"), join))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^end$"), end))
-    app.add_handler(MessageHandler(filters.ALL, handle_message))
+    app.add_handler(CommandHandler("start", start_with_room))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start_with_room))
 
     app.run_polling()
 
