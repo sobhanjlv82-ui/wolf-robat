@@ -1,4 +1,5 @@
 import os
+import json
 import random
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,19 +7,32 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-rooms = {}
 TURN_TIME = 30
+DATA_FILE = "rooms.json"
 
+
+# ---------------- FILE STORAGE ---------------- #
+
+def load_rooms():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_rooms():
+    with open(DATA_FILE, "w") as f:
+        json.dump(rooms, f)
+
+
+rooms = load_rooms()
 
 truths = [
-    "بزرگ‌ترین دروغی که گفتی چی بوده؟",
+    "بزرگ‌ترین دروغت چی بوده؟",
     "بدترین سوتی زندگیت چی بوده؟",
     "آخرین باری که گریه کردی کی بود؟",
 ]
@@ -35,21 +49,21 @@ punishments = [
 ]
 
 
-# ================= START ================= #
+# ---------------- START ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎮 ساخت اتاق", callback_data="create")],
-        [InlineKeyboardButton("🔑 ورود به اتاق", callback_data="join")],
+        [InlineKeyboardButton("🔑 ورود با کد", callback_data="join")],
     ]
 
     await update.message.reply_text(
-        "🐺 بازی جرئت یا حقیقت\n\nیکی انتخاب کن 👇",
+        "🐺 بازی جرئت یا حقیقت",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
-# ================= CREATE ROOM ================= #
+# ---------------- CREATE ROOM ---------------- #
 
 async def create_room(update: Update, context):
     query = update.callback_query
@@ -59,14 +73,15 @@ async def create_room(update: Update, context):
 
     rooms[room_id] = {
         "players": [query.from_user.id],
-        "scores": {query.from_user.id: 0},
+        "scores": {str(query.from_user.id): 0},
         "current": 0,
         "waiting": False,
     }
 
+    save_rooms()
+
     keyboard = [
-        [InlineKeyboardButton("📩 دعوت دوست", url=f"https://t.me/{context.bot.username}?start={room_id}")],
-        [InlineKeyboardButton("🚀 شروع بازی", callback_data=f"start_{room_id}")],
+        [InlineKeyboardButton("📩 دعوت دوست", url=f"https://t.me/{context.bot.username}?start={room_id}")]
     ]
 
     await query.message.reply_text(
@@ -75,18 +90,9 @@ async def create_room(update: Update, context):
     )
 
 
-# ================= JOIN ROOM ================= #
+# ---------------- JOIN WITH CODE ---------------- #
 
-async def join_room(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-
-    await query.message.reply_text("🔑 کد اتاق را بفرست:\n/start 1234")
-
-
-# ================= JOIN WITH CODE ================= #
-
-async def join_with_code(update: Update, context):
+async def join_with_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return
 
@@ -97,55 +103,49 @@ async def join_with_code(update: Update, context):
         return
 
     room = rooms[room_id]
-    user = update.effective_user
+    user_id = update.effective_user.id
 
-    if user.id in room["players"]:
+    if user_id in room["players"]:
         await update.message.reply_text("قبلاً وارد شدی 😎")
         return
 
-    if len(room["players"]) >= 8:
-        await update.message.reply_text("ظرفیت پر شده.")
-        return
-
-    room["players"].append(user.id)
-    room["scores"][user.id] = 0
+    room["players"].append(user_id)
+    room["scores"][str(user_id)] = 0
+    save_rooms()
 
     await update.message.reply_text("✅ وارد اتاق شدی!")
 
+    if len(room["players"]) >= 2:
+        await start_round(room_id, context)
 
-# ================= START ROUND ================= #
+
+# ---------------- START ROUND ---------------- #
 
 async def start_round(room_id, context):
     room = rooms[room_id]
-
-    if not room["players"]:
-        return
-
     player_id = room["players"][room["current"]]
-    user = await context.bot.get_chat(player_id)
 
     choice = random.choice(["truth", "dare"])
     question = random.choice(truths if choice == "truth" else dares)
 
     room["waiting"] = True
-
-    text = f"🎯 نوبت {user.first_name}\n⏳ {TURN_TIME} ثانیه وقت داری\n\n{question}"
+    save_rooms()
 
     keyboard = [
         [InlineKeyboardButton("✅ انجام شد", callback_data=f"done_{room_id}")],
-        [InlineKeyboardButton("❌ انجام نشد", callback_data=f"fail_{room_id}")],
+        [InlineKeyboardButton("❌ انجام نشد", callback_data=f"fail_{room_id}")]
     ]
 
     await context.bot.send_message(
-        room_id if room_id.startswith("-") else player_id,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        player_id,
+        f"🎯 نوبت تو\n⏳ {TURN_TIME} ثانیه وقت داری\n\n{question}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     asyncio.create_task(turn_timeout(room_id, context))
 
 
-# ================= TIMEOUT ================= #
+# ---------------- TIMEOUT ---------------- #
 
 async def turn_timeout(room_id, context):
     await asyncio.sleep(TURN_TIME)
@@ -156,15 +156,19 @@ async def turn_timeout(room_id, context):
 
     punishment = random.choice(punishments)
 
-    await context.bot.send_message(room_id, f"⛔ وقت تموم شد!\n{punishment}")
+    await context.bot.send_message(
+        room["players"][room["current"]],
+        f"⛔ وقت تموم شد!\n{punishment}"
+    )
 
     room["waiting"] = False
     room["current"] = (room["current"] + 1) % len(room["players"])
+    save_rooms()
 
     await start_round(room_id, context)
 
 
-# ================= BUTTON HANDLER ================= #
+# ---------------- BUTTON HANDLER ---------------- #
 
 async def button_handler(update: Update, context):
     query = update.callback_query
@@ -173,17 +177,17 @@ async def button_handler(update: Update, context):
     if data == "create":
         await create_room(update, context)
 
-    elif data == "join":
-        await join_room(update, context)
-
     elif data.startswith("done_"):
         room_id = data.split("_")[1]
         room = rooms.get(room_id)
 
         if room:
             user_id = query.from_user.id
-            room["scores"][user_id] += 1
+            room["scores"][str(user_id)] += 1
             room["waiting"] = False
+            room["current"] = (room["current"] + 1) % len(room["players"])
+            save_rooms()
+
             await query.message.reply_text("🔥 +1 امتیاز گرفتی!")
             await start_round(room_id, context)
 
@@ -193,7 +197,7 @@ async def button_handler(update: Update, context):
     await query.answer()
 
 
-# ================= MAIN ================= #
+# ---------------- MAIN ---------------- #
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -201,7 +205,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("start", join_with_code))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, join_with_code))
 
     app.run_polling()
 
