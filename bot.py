@@ -6,6 +6,8 @@ from telegram import *
 from telegram.ext import *
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# 🔥 کانال خودتو اینجا بزار
 CHANNEL_USERNAME = "@Wolfrobat1382"
 
 DATA_FILE = "data.json"
@@ -19,7 +21,12 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             return json.load(f)
-    return {"rooms": {}, "votes": {}, "active_chats": {}}
+    return {
+        "rooms": {},
+        "votes": {},
+        "active_chats": {},
+        "anonymous_links": {}
+    }
 
 
 def save_data():
@@ -63,13 +70,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await force_join(update, context)
         return
 
+    if context.args:
+        code = context.args[0]
+
+        # 🎮 ورود به اتاق بازی
+        if code.startswith("room_"):
+            room_id = code.replace("room_", "")
+            if room_id in data["rooms"]:
+                room = data["rooms"][room_id]
+                if user.id not in room["players"]:
+                    room["players"].append(user.id)
+                    room["scores"][str(user.id)] = 0
+                    save_data()
+                    await update.message.reply_text("✅ وارد بازی شدی!")
+            return
+
+        # 🕵️ ورود به چت ناشناس
+        if code.startswith("anon_"):
+            owner = code.replace("anon_", "")
+            uid = str(user.id)
+
+            if owner == uid:
+                await update.message.reply_text("❌ نمی‌تونی با خودت چت بسازی.")
+                return
+
+            data["active_chats"][uid] = owner
+            data["active_chats"][owner] = uid
+            save_data()
+
+            await update.message.reply_text("🔗 چت ناشناس فعال شد!")
+            return
+
     keyboard = [
-        [InlineKeyboardButton("🎮 ساخت اتاق", callback_data="create_room")],
-        [InlineKeyboardButton("🕵️ چت ناشناس", callback_data="create_anon")]
+        [InlineKeyboardButton("🎮 بازی در گروه",
+                              url=f"https://t.me/{context.bot.username}?startgroup=true")],
+        [InlineKeyboardButton("🎮 بازی در پیوی", callback_data="create_room")],
+        [InlineKeyboardButton("🕵️ لینک چت ناشناس", callback_data="create_anon")]
     ]
 
     await update.message.reply_text(
-        f"👑 سلام {user.first_name}\n\nنسخه حرفه‌ای بازی فعال شد 🚀",
+        "👑 به ربات حرفه‌ای بازی خوش اومدی 🚀",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -85,12 +125,11 @@ async def create_room(update: Update, context):
 
     data["rooms"][room_id] = {
         "players": [query.from_user.id],
-        "scores": {},
+        "scores": {str(query.from_user.id): 0},
         "current": 0,
         "waiting": False
     }
 
-    data["rooms"][room_id]["scores"][str(query.from_user.id)] = 0
     save_data()
 
     link = f"https://t.me/{context.bot.username}?start=room_{room_id}"
@@ -105,52 +144,38 @@ async def create_room(update: Update, context):
     )
 
 
-# ================= GAME ROUND ================= #
+# ================= ANONYMOUS LINK ================= #
 
-async def start_round(room_id, context):
+async def create_anon(update: Update, context):
 
-    room = data["rooms"][room_id]
+    query = update.callback_query
+    await query.answer()
 
-    if not room["players"]:
-        return
+    uid = str(query.from_user.id)
 
-    player_id = room["players"][room["current"]]
-
-    question = random.choice([
-        "یه راز بگو 😈",
-        "یه حرکت خفن انجام بده 🎭",
-        "یه کار خجالت‌آور بکن 😂"
-    ])
-
-    room["waiting"] = True
+    data["anonymous_links"][uid] = True
     save_data()
 
+    link = f"https://t.me/{context.bot.username}?start=anon_{uid}"
+
     keyboard = [
-        [InlineKeyboardButton("👍 انجام داد", callback_data=f"vote_yes_{room_id}")],
-        [InlineKeyboardButton("👎 انجام نداد", callback_data=f"vote_no_{room_id}")]
+        [InlineKeyboardButton("🔗 کپی لینک", url=link)]
     ]
 
-    for uid in room["players"]:
-        await context.bot.send_message(
-            uid,
-            f"🎯 نوبت <a href='tg://user?id={player_id}'>بازیکن</a>\n\n{question}",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    asyncio.create_task(turn_timeout(room_id, context))
+    await query.message.reply_text(
+        "🕵️ لینک چت ناشناس اختصاصی شما ساخته شد:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
-# ================= VOTING SYSTEM ================= #
+# ================= VOTING ================= #
 
 async def handle_vote(update: Update, context):
 
     query = update.callback_query
-    data_vote = query.data
 
-    if data_vote.startswith("vote_"):
-
-        _, vote_type, room_id = data_vote.split("_")
+    if query.data.startswith("vote_"):
+        _, vote_type, room_id = query.data.split("_")
 
         room = data["rooms"].get(room_id)
         if not room:
@@ -168,7 +193,6 @@ async def handle_vote(update: Update, context):
 
         await query.answer("رأی ثبت شد ✅")
 
-        # اگر رأی کامل شد
         total_votes = data["votes"][room_id]["yes"] + data["votes"][room_id]["no"]
 
         if total_votes >= len(room["players"]):
@@ -176,38 +200,34 @@ async def handle_vote(update: Update, context):
             if data["votes"][room_id]["yes"] > data["votes"][room_id]["no"]:
                 uid = room["players"][room["current"]]
                 room["scores"][str(uid)] += 1
-                msg = "🔥 بازیکن قبول شد +1 امتیاز"
+                msg = "🔥 رأی مثبت بیشتر بود → +1 امتیاز"
 
             else:
                 msg = "⛔ رأی منفی بیشتر بود → حکم اجرا میشه"
 
             room["current"] = (room["current"] + 1) % len(room["players"])
-            room["waiting"] = False
             data["votes"][room_id] = {"yes": 0, "no": 0}
+            room["waiting"] = False
 
             save_data()
 
             for uid in room["players"]:
                 await context.bot.send_message(uid, msg)
 
-            await start_round(room_id, context)
 
+# ================= MESSAGE FORWARD (ANONYMOUS) ================= #
 
-# ================= TIMEOUT ================= #
+async def forward_message(update: Update, context):
 
-async def turn_timeout(room_id, context):
+    uid = str(update.effective_user.id)
 
-    await asyncio.sleep(TURN_TIME)
+    if uid in data["active_chats"]:
+        partner = data["active_chats"][uid]
 
-    room = data["rooms"].get(room_id)
-    if not room or not room["waiting"]:
-        return
-
-    room["waiting"] = False
-    room["current"] = (room["current"] + 1) % len(room["players"])
-    save_data()
-
-    await start_round(room_id, context)
+        await context.bot.send_message(
+            int(partner),
+            f"📩 پیام ناشناس:\n\n{update.message.text}"
+        )
 
 
 # ================= BUTTON HANDLER ================= #
@@ -218,6 +238,9 @@ async def button_handler(update: Update, context):
 
     if query.data == "create_room":
         await create_room(update, context)
+
+    elif query.data == "create_anon":
+        await create_anon(update, context)
 
     elif query.data.startswith("vote_"):
         await handle_vote(update, context)
@@ -233,6 +256,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_message))
 
     app.run_polling()
 
