@@ -7,9 +7,6 @@ from telegram.ext import *
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# 👇 کانال اجباری (اگر خواستی بعداً اضافه کنیم میذاریم)
-CHANNEL_USERNAME = "@Wolfrobat1382"
-
 DATA_FILE = "group_data.json"
 TURN_TIME = 40
 
@@ -31,20 +28,49 @@ def save_data():
 data = load_data()
 
 
-# ================= WELCOME MESSAGE ================= #
+# ================= START (PRIVATE MESSAGE UI) ================= #
 
-async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.effective_user
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🎮 بازی در گروه",
+                url=f"https://t.me/{context.bot.username}?startgroup=true"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "➕ افزودن به گروه",
+                url=f"https://t.me/{context.bot.username}?startgroup=true"
+            )
+        ]
+    ]
+
+    await update.message.reply_text(
+        "سلام به WOLF ROBAT 🐺\n\n"
+        "خوش اومدی 🎊🎉💥🕺🏻😎\n\n"
+        "منو با خودت به گروهت ببر تا بچه‌ها رو سرگرم کنم 🚀",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ================= WELCOME WHEN BOT ADDED ================= #
+
+async def welcome(update: Update, context):
 
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
             await update.message.reply_text(
-                "سلام به WOLF ROBAT 🐺\n\n"
-                "خوش اومدی 🎊🎉💥🕺🏻😎\n"
-                "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم!"
+                "🎉 سلام گروه!\n\n"
+                "من آماده‌ام بازی جرئت و حقیقت رو شروع کنم 😎\n\n"
+                "برای شروع بنویسید:\n/startgame"
             )
 
 
-# ================= START GAME ================= #
+# ================= START GAME (GROUP ONLY) ================= #
 
 async def start_game(update: Update, context):
 
@@ -54,75 +80,35 @@ async def start_game(update: Update, context):
         data["rooms"][chat_id] = {
             "players": [],
             "scores": {},
-            "current": 0,
-            "waiting": False
+            "current": 0
         }
 
     room = data["rooms"][chat_id]
 
-    # گرفتن اعضای گروه
+    # جمع کردن اعضای گروه
+    members = []
     async for member in context.bot.get_chat_administrators(chat_id):
-        if member.user.id not in room["players"]:
-            room["players"].append(member.user.id)
-            room["scores"][str(member.user.id)] = 0
+        members.append(member.user.id)
+
+    room["players"] = members
+    for uid in members:
+        if str(uid) not in room["scores"]:
+            room["scores"][str(uid)] = 0
 
     save_data()
 
-    await next_turn(update, context)
+    await next_turn(chat_id, context)
 
 
 # ================= NEXT TURN ================= #
 
-async def next_turn(update: Update, context):
+async def next_turn(chat_id, context):
 
-    chat_id = update.effective_chat.id
     room = data["rooms"][chat_id]
 
     if not room["players"]:
         return
 
-    player_id = room["players"][room["current"]]
-
-    question = random.choice([
-        "یه راز بگو 😈",
-        "یه حرکت خفن انجام بده 🎭",
-        "یه کار خجالت‌آور انجام بده 😂"
-    ])
-
-    keyboard = [
-        [InlineKeyboardButton("👍 انجام داد", callback_data=f"vote_yes_{chat_id}")],
-        [InlineKeyboardButton("👎 انجام نداد", callback_data=f"vote_no_{chat_id}")]
-    ]
-
-    await context.bot.send_message(
-        chat_id,
-        f"🎯 نوبت <a href='tg://user?id={player_id}'>بازیکن</a>\n\n{question}",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    asyncio.create_task(turn_timeout(chat_id, context))
-
-
-# ================= TIMEOUT ================= #
-
-async def turn_timeout(chat_id, context):
-
-    await asyncio.sleep(TURN_TIME)
-
-    room = data["rooms"].get(chat_id)
-    if not room:
-        return
-
-    room["current"] = (room["current"] + 1) % len(room["players"])
-    save_data()
-
-    await context.bot.send_message(chat_id, "⏳ وقت تموم شد!")
-    await next_turn_by_id(chat_id, context)
-
-
-async def next_turn_by_id(chat_id, context):
-    room = data["rooms"][chat_id]
     player_id = room["players"][room["current"]]
 
     question = random.choice([
@@ -161,7 +147,6 @@ async def handle_vote(update: Update, context):
         room["votes"] = {"yes": 0, "no": 0}
 
     room["votes"][vote_type] += 1
-
     save_data()
 
     await query.answer("رأی ثبت شد ✅")
@@ -169,12 +154,12 @@ async def handle_vote(update: Update, context):
 
 # ================= HANDLER ================= #
 
-async def handler(update: Update, context):
+async def message_handler(update: Update, context):
 
     if update.message.new_chat_members:
         await welcome(update, context)
 
-    if update.message and update.message.text == "/startgame":
+    if update.message.text == "/startgame":
         await start_game(update, context)
 
 
@@ -182,8 +167,9 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     app.add_handler(CallbackQueryHandler(handle_vote))
 
     app.run_polling()
