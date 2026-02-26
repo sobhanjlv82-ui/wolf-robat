@@ -7,12 +7,11 @@ from telegram.ext import *
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# 🔥 کانال خودتو اینجا بزار
+# 👇 کانال اجباری (اگر خواستی بعداً اضافه کنیم میذاریم)
 CHANNEL_USERNAME = "@Wolfrobat1382"
 
-DATA_FILE = "data.json"
+DATA_FILE = "group_data.json"
 TURN_TIME = 40
-MAX_PLAYERS = 50
 
 
 # ================= STORAGE ================= #
@@ -21,12 +20,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             return json.load(f)
-    return {
-        "rooms": {},
-        "votes": {},
-        "active_chats": {},
-        "anonymous_links": {}
-    }
+    return {"rooms": {}}
 
 
 def save_data():
@@ -37,226 +31,160 @@ def save_data():
 data = load_data()
 
 
-# ================= FORCE JOIN ================= #
+# ================= WELCOME MESSAGE ================= #
 
-async def check_member(user_id, context):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
+async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-
-async def force_join(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📢 عضویت در کانال",
-                              url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
-        [InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")]
-    ]
-
-    await update.effective_message.reply_text(
-        "❌ برای استفاده باید عضو کانال باشی!",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            await update.message.reply_text(
+                "سلام به WOLF ROBAT 🐺\n\n"
+                "خوش اومدی 🎊🎉💥🕺🏻😎\n"
+                "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم!"
+            )
 
 
-# ================= START ================= #
+# ================= START GAME ================= #
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_game(update: Update, context):
 
-    user = update.effective_user
+    chat_id = update.effective_chat.id
 
-    if not await check_member(user.id, context):
-        await force_join(update, context)
+    if chat_id not in data["rooms"]:
+        data["rooms"][chat_id] = {
+            "players": [],
+            "scores": {},
+            "current": 0,
+            "waiting": False
+        }
+
+    room = data["rooms"][chat_id]
+
+    # گرفتن اعضای گروه
+    async for member in context.bot.get_chat_administrators(chat_id):
+        if member.user.id not in room["players"]:
+            room["players"].append(member.user.id)
+            room["scores"][str(member.user.id)] = 0
+
+    save_data()
+
+    await next_turn(update, context)
+
+
+# ================= NEXT TURN ================= #
+
+async def next_turn(update: Update, context):
+
+    chat_id = update.effective_chat.id
+    room = data["rooms"][chat_id]
+
+    if not room["players"]:
         return
 
-    if context.args:
-        code = context.args[0]
+    player_id = room["players"][room["current"]]
 
-        # 🎮 ورود به اتاق بازی
-        if code.startswith("room_"):
-            room_id = code.replace("room_", "")
-            if room_id in data["rooms"]:
-                room = data["rooms"][room_id]
-                if user.id not in room["players"]:
-                    room["players"].append(user.id)
-                    room["scores"][str(user.id)] = 0
-                    save_data()
-                    await update.message.reply_text("✅ وارد بازی شدی!")
-            return
-
-        # 🕵️ ورود به چت ناشناس
-        if code.startswith("anon_"):
-            owner = code.replace("anon_", "")
-            uid = str(user.id)
-
-            if owner == uid:
-                await update.message.reply_text("❌ نمی‌تونی با خودت چت بسازی.")
-                return
-
-            data["active_chats"][uid] = owner
-            data["active_chats"][owner] = uid
-            save_data()
-
-            await update.message.reply_text("🔗 چت ناشناس فعال شد!")
-            return
+    question = random.choice([
+        "یه راز بگو 😈",
+        "یه حرکت خفن انجام بده 🎭",
+        "یه کار خجالت‌آور انجام بده 😂"
+    ])
 
     keyboard = [
-        [InlineKeyboardButton("🎮 بازی در گروه",
-                              url=f"https://t.me/{context.bot.username}?startgroup=true")],
-        [InlineKeyboardButton("🎮 بازی در پیوی", callback_data="create_room")],
-        [InlineKeyboardButton("🕵️ لینک چت ناشناس", callback_data="create_anon")]
+        [InlineKeyboardButton("👍 انجام داد", callback_data=f"vote_yes_{chat_id}")],
+        [InlineKeyboardButton("👎 انجام نداد", callback_data=f"vote_no_{chat_id}")]
     ]
 
-    await update.message.reply_text(
-        "👑 به ربات حرفه‌ای بازی خوش اومدی 🚀",
+    await context.bot.send_message(
+        chat_id,
+        f"🎯 نوبت <a href='tg://user?id={player_id}'>بازیکن</a>\n\n{question}",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+    asyncio.create_task(turn_timeout(chat_id, context))
 
-# ================= CREATE ROOM ================= #
 
-async def create_room(update: Update, context):
+# ================= TIMEOUT ================= #
 
-    query = update.callback_query
-    await query.answer()
+async def turn_timeout(chat_id, context):
 
-    room_id = str(random.randint(1000, 9999))
+    await asyncio.sleep(TURN_TIME)
 
-    data["rooms"][room_id] = {
-        "players": [query.from_user.id],
-        "scores": {str(query.from_user.id): 0},
-        "current": 0,
-        "waiting": False
-    }
+    room = data["rooms"].get(chat_id)
+    if not room:
+        return
 
+    room["current"] = (room["current"] + 1) % len(room["players"])
     save_data()
 
-    link = f"https://t.me/{context.bot.username}?start=room_{room_id}"
+    await context.bot.send_message(chat_id, "⏳ وقت تموم شد!")
+    await next_turn_by_id(chat_id, context)
+
+
+async def next_turn_by_id(chat_id, context):
+    room = data["rooms"][chat_id]
+    player_id = room["players"][room["current"]]
+
+    question = random.choice([
+        "یه راز بگو 😈",
+        "یه حرکت خفن انجام بده 🎭",
+        "یه کار خجالت‌آور انجام بده 😂"
+    ])
 
     keyboard = [
-        [InlineKeyboardButton("📩 دعوت دوست", url=link)]
+        [InlineKeyboardButton("👍 انجام داد", callback_data=f"vote_yes_{chat_id}")],
+        [InlineKeyboardButton("👎 انجام نداد", callback_data=f"vote_no_{chat_id}")]
     ]
 
-    await query.message.reply_text(
-        f"🎮 اتاق ساخته شد\nکد: {room_id}",
+    await context.bot.send_message(
+        chat_id,
+        f"🎯 نوبت <a href='tg://user?id={player_id}'>بازیکن</a>\n\n{question}",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ================= ANONYMOUS LINK ================= #
-
-async def create_anon(update: Update, context):
-
-    query = update.callback_query
-    await query.answer()
-
-    uid = str(query.from_user.id)
-
-    data["anonymous_links"][uid] = True
-    save_data()
-
-    link = f"https://t.me/{context.bot.username}?start=anon_{uid}"
-
-    keyboard = [
-        [InlineKeyboardButton("🔗 کپی لینک", url=link)]
-    ]
-
-    await query.message.reply_text(
-        "🕵️ لینک چت ناشناس اختصاصی شما ساخته شد:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-# ================= VOTING ================= #
+# ================= VOTE ================= #
 
 async def handle_vote(update: Update, context):
 
     query = update.callback_query
+    _, vote_type, chat_id = query.data.split("_")
 
-    if query.data.startswith("vote_"):
-        _, vote_type, room_id = query.data.split("_")
+    chat_id = int(chat_id)
+    room = data["rooms"].get(chat_id)
 
-        room = data["rooms"].get(room_id)
-        if not room:
-            return
+    if not room:
+        return
 
-        if room_id not in data["votes"]:
-            data["votes"][room_id] = {"yes": 0, "no": 0}
+    if "votes" not in room:
+        room["votes"] = {"yes": 0, "no": 0}
 
-        if vote_type == "yes":
-            data["votes"][room_id]["yes"] += 1
-        else:
-            data["votes"][room_id]["no"] += 1
+    room["votes"][vote_type] += 1
 
-        save_data()
+    save_data()
 
-        await query.answer("رأی ثبت شد ✅")
-
-        total_votes = data["votes"][room_id]["yes"] + data["votes"][room_id]["no"]
-
-        if total_votes >= len(room["players"]):
-
-            if data["votes"][room_id]["yes"] > data["votes"][room_id]["no"]:
-                uid = room["players"][room["current"]]
-                room["scores"][str(uid)] += 1
-                msg = "🔥 رأی مثبت بیشتر بود → +1 امتیاز"
-
-            else:
-                msg = "⛔ رأی منفی بیشتر بود → حکم اجرا میشه"
-
-            room["current"] = (room["current"] + 1) % len(room["players"])
-            data["votes"][room_id] = {"yes": 0, "no": 0}
-            room["waiting"] = False
-
-            save_data()
-
-            for uid in room["players"]:
-                await context.bot.send_message(uid, msg)
+    await query.answer("رأی ثبت شد ✅")
 
 
-# ================= MESSAGE FORWARD (ANONYMOUS) ================= #
+# ================= HANDLER ================= #
 
-async def forward_message(update: Update, context):
+async def handler(update: Update, context):
 
-    uid = str(update.effective_user.id)
+    if update.message.new_chat_members:
+        await welcome(update, context)
 
-    if uid in data["active_chats"]:
-        partner = data["active_chats"][uid]
+    if update.message and update.message.text == "/startgame":
+        await start_game(update, context)
 
-        await context.bot.send_message(
-            int(partner),
-            f"📩 پیام ناشناس:\n\n{update.message.text}"
-        )
-
-
-# ================= BUTTON HANDLER ================= #
-
-async def button_handler(update: Update, context):
-
-    query = update.callback_query
-
-    if query.data == "create_room":
-        await create_room(update, context)
-
-    elif query.data == "create_anon":
-        await create_anon(update, context)
-
-    elif query.data.startswith("vote_"):
-        await handle_vote(update, context)
-
-    await query.answer()
-
-
-# ================= MAIN ================= #
 
 def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_message))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler))
+    app.add_handler(CallbackQueryHandler(handle_vote))
 
     app.run_polling()
 
