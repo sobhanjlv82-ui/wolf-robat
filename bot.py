@@ -1,266 +1,167 @@
-import os
-import json
+import logging
 import random
-from telegram import *
-from telegram.ext import *
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "YOUR_BOT_TOKEN"
 CHANNEL_USERNAME = "@Wolfrobat1382"
-DATA_FILE = "game_data.json"
-MAX_PLAYERS = 50
 
-# ================= STORAGE ================= #
+logging.basicConfig(level=logging.INFO)
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"rooms": {}}
+games = {}
 
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+truth_questions = [
+    "آخرین دروغی که گفتی چی بود؟ 😅",
+    "به کی کراش داری؟ 😎",
+    "بزرگ‌ترین ترست چیه؟ 😬",
+    "بدترین سوتی زندگیت چی بوده؟ 😂",
+]
 
-data = load_data()
+dare_questions = [
+    "یک ویس خنده‌دار بفرست 😂",
+    "اسم یکیو تگ کن بگو عاشقتم ❤️",
+    "تا ۱۰ برعکس بشمار 😜",
+    "یه جمله با ایموجی بگو 🤪",
+]
 
-# ================= FORCE JOIN ================= #
 
-async def is_member(user_id, context):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
+async def force_join(user_id, bot):
+    member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
+    return member.status in ["member", "administrator", "creator"]
 
-async def force_join_message(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📢 عضویت در کانال",
-            url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
-        [InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")]
-    ]
-
-    if update.callback_query:
-        await update.callback_query.message.reply_text(
-            "❌ برای استفاده از بازی باید عضو کانال باشی!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await update.message.reply_text(
-            "❌ برای استفاده از بازی باید عضو کانال باشی!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-# ================= START ================= #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
 
-    chat = update.effective_chat
-    user_id = update.effective_user.id
-
-    if not await is_member(user_id, context):
-        await force_join_message(update, context)
-        return
-
-    if chat.type == "private":
-
-        keyboard = [[InlineKeyboardButton(
-            "➕ افزودن به گروه",
-            url=f"https://t.me/{context.bot.username}?startgroup=true"
-        )]]
+    if update.effective_chat.type == "private":
+        keyboard = [
+            [InlineKeyboardButton("➕ اضافه کردن به گروه", url=f"https://t.me/{context.bot.username}?startgroup=true")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            "سلام به WOLF ROBAT 🐺\n\n"
-            "خوش اومدی 🎊🎉💥🕺🏻😎\n\n"
-            "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "سلام به WOLF ROBAT 🐺 خوش اومدی\n"
+            "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم 🎊🎉💥🕺🏻😎",
+            reply_markup=reply_markup,
         )
 
-    else:
-        keyboard = [[InlineKeyboardButton("🎮 شروع بازی", callback_data="create_game")]]
 
-        await update.message.reply_text(
-            "برای ساخت بازی روی دکمه بزن 👇",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
 
-# ================= CREATE GAME ================= #
-
-async def create_game(update: Update, context):
-
-    query = update.callback_query
-    user_id = query.from_user.id
-
-    if not await is_member(user_id, context):
-        await force_join_message(update, context)
+    if update.effective_chat.type not in ["group", "supergroup"]:
         return
 
-    await query.answer()
-
-    chat_id = query.message.chat.id
-
-    data["rooms"][chat_id] = {
+    games[chat_id] = {
         "players": [],
-        "scores": {},
-        "current": 0,
-        "votes": {"yes": 0, "no": 0},
-        "started": False
+        "started": False,
+        "turn": 0,
     }
 
-    save_data()
-
     keyboard = [
-        [InlineKeyboardButton("➕ ورود به بازی", callback_data="join_game")],
-        [InlineKeyboardButton("🚀 شروع نهایی", callback_data="final_start")]
+        [InlineKeyboardButton("🎮 ورود به بازی", callback_data="join_game")],
+        [InlineKeyboardButton("🚀 شروع رسمی بازی", callback_data="begin_game")],
     ]
 
-    await query.message.reply_text(
-        "🎮 بازی ساخته شد!\n\nبازیکنان روی «ورود به بازی» بزنن.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "🔥 بازی جرئت یا حقیقت شروع شد!\n"
+        "برای شرکت روی «ورود به بازی» بزنید.\n"
+        "حداقل ۲ نفر لازم است.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-# ================= JOIN GAME ================= #
 
-async def join_game(update: Update, context):
-
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
-
-    if not await is_member(user_id, context):
-        await force_join_message(update, context)
-        return
-
     await query.answer()
 
     chat_id = query.message.chat.id
-    room = data["rooms"].get(chat_id)
+    user = query.from_user
 
-    if not room or room["started"]:
+    if not await force_join(user.id, context.bot):
+        keyboard = [[InlineKeyboardButton("عضویت در کانال", url="https://t.me/Wolfrobat1382")]]
+        await query.message.reply_text(
+            "🔒 اول باید عضو کانال بشی بعد بازی کنی.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
         return
 
-    if user_id not in room["players"]:
+    if query.data == "join_game":
+        if user.id not in games[chat_id]["players"]:
+            games[chat_id]["players"].append(user.id)
 
-        if len(room["players"]) >= MAX_PLAYERS:
-            await query.answer("ظرفیت پر شده ❌", show_alert=True)
+            await query.message.reply_text(
+                f"✅ {user.first_name} وارد بازی شد!\n"
+                "منتظر نفر بعدی باشید تا بازی شروع شود..."
+            )
+
+    elif query.data == "begin_game":
+        if len(games[chat_id]["players"]) < 2:
+            await query.message.reply_text("❌ حداقل ۲ نفر باید وارد بازی شوند.")
             return
 
-        room["players"].append(user_id)
-        room["scores"][str(user_id)] = 0
-        save_data()
+        games[chat_id]["started"] = True
+        games[chat_id]["turn"] = 0
 
-        await query.answer("وارد بازی شدی ✅", show_alert=True)
+        await next_turn(chat_id, context)
 
-# ================= FINAL START ================= #
-
-async def final_start(update: Update, context):
-
-    query = update.callback_query
-    user_id = query.from_user.id
-
-    if not await is_member(user_id, context):
-        await force_join_message(update, context)
-        return
-
-    await query.answer()
-
-    chat_id = query.message.chat.id
-    room = data["rooms"].get(chat_id)
-
-    if not room:
-        return
-
-    if len(room["players"]) < 2:
-        await query.answer("حداقل ۲ نفر لازم است ❌", show_alert=True)
-        return
-
-    room["started"] = True
-    save_data()
-
-    await next_turn(chat_id, context)
-
-# ================= NEXT TURN ================= #
 
 async def next_turn(chat_id, context):
-
-    room = data["rooms"][chat_id]
-    player_id = room["players"][room["current"]]
-
-    question = random.choice([
-        "یه راز بگو 😈",
-        "یه حرکت خفن انجام بده 🎭",
-        "یه کار خجالت‌آور انجام بده 😂"
-    ])
+    game = games[chat_id]
+    player_id = game["players"][game["turn"]]
+    user = await context.bot.get_chat(player_id)
 
     keyboard = [
-        [InlineKeyboardButton("👍 انجام داد", callback_data=f"vote_yes_{chat_id}")],
-        [InlineKeyboardButton("👎 انجام نداد", callback_data=f"vote_no_{chat_id}")]
+        [
+            InlineKeyboardButton("😈 جرئت", callback_data="dare"),
+            InlineKeyboardButton("🤔 حقیقت", callback_data="truth"),
+        ]
     ]
 
     await context.bot.send_message(
         chat_id,
-        f"🎯 نوبت <a href='tg://user?id={player_id}'>بازیکن</a>\n\n{question}",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        f"🎯 نوبت {user.first_name} است!\n"
+        "جرئت یا حقیقت؟",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-# ================= VOTE ================= #
 
-async def handle_vote(update: Update, context):
-
+async def choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    _, vote_type, chat_id = query.data.split("_")
-    chat_id = int(chat_id)
+    chat_id = query.message.chat.id
+    game = games[chat_id]
 
-    room = data["rooms"].get(chat_id)
-    if not room:
+    if not game["started"]:
         return
 
-    room["votes"][vote_type] += 1
-
-    total_votes = room["votes"]["yes"] + room["votes"]["no"]
-
-    if total_votes >= len(room["players"]):
-
-        if room["votes"]["yes"] > room["votes"]["no"]:
-            player_id = room["players"][room["current"]]
-            room["scores"][str(player_id)] += 1
-            msg = "🔥 قبول شد! +1 امتیاز"
-        else:
-            msg = "⛔ رأی منفی بیشتر بود! حکم اجرا میشه 😈"
-
-        room["votes"] = {"yes": 0, "no": 0}
-        room["current"] = (room["current"] + 1) % len(room["players"])
-        save_data()
-
-        await query.message.reply_text(msg)
-        await next_turn(chat_id, context)
-
-# ================= CHECK JOIN BUTTON ================= #
-
-async def check_join(update: Update, context):
-    query = update.callback_query
-    user_id = query.from_user.id
-
-    if await is_member(user_id, context):
-        await query.answer("عضویت تایید شد ✅", show_alert=True)
+    if query.data == "truth":
+        question = random.choice(truth_questions)
     else:
-        await query.answer("هنوز عضو نشدی ❌", show_alert=True)
+        question = random.choice(dare_questions)
 
-# ================= MAIN ================= #
+    await query.message.reply_text(f"🎲 سوال:\n{question}")
+
+    game["turn"] = (game["turn"] + 1) % len(game["players"])
+    await next_turn(chat_id, context)
+
 
 def main():
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(create_game, pattern="create_game"))
-    app.add_handler(CallbackQueryHandler(join_game, pattern="join_game"))
-    app.add_handler(CallbackQueryHandler(final_start, pattern="final_start"))
-    app.add_handler(CallbackQueryHandler(handle_vote, pattern="vote_"))
-    app.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
+    app.add_handler(CommandHandler("شروع_بازی", start_game))
+    app.add_handler(CallbackQueryHandler(buttons, pattern="join_game|begin_game"))
+    app.add_handler(CallbackQueryHandler(choice, pattern="truth|dare"))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
