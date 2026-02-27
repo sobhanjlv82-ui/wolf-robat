@@ -35,7 +35,7 @@ async def is_member(user_id, context):
 async def force_join_message(update, context):
     keyboard = [
         [InlineKeyboardButton("📢 عضویت در کانال",
-            url=f"https://t.me/{Wolfrobat1382}
+            url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
         [InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")]
     ]
 
