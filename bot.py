@@ -5,8 +5,8 @@ from telegram import *
 from telegram.ext import *
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-DATA_FILE = "group_data.json"
+CHANNEL_USERNAME = "@Wolfrobat1382"
+DATA_FILE = "game_data.json"
 MAX_PLAYERS = 50
 
 # ================= STORAGE ================= #
@@ -23,21 +23,50 @@ def save_data():
 
 data = load_data()
 
+# ================= FORCE JOIN ================= #
+
+async def is_member(user_id, context):
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+async def force_join_message(update, context):
+    keyboard = [
+        [InlineKeyboardButton("📢 عضویت در کانال",
+            url=f"https://t.me/{Wolfrobat1382}
+        [InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")]
+    ]
+
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            "❌ برای استفاده از بازی باید عضو کانال باشی!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            "❌ برای استفاده از بازی باید عضو کانال باشی!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
 # ================= START ================= #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat = update.effective_chat
+    user_id = update.effective_user.id
 
-    # اگر پیوی بود
+    if not await is_member(user_id, context):
+        await force_join_message(update, context)
+        return
+
     if chat.type == "private":
 
-        keyboard = [
-            [InlineKeyboardButton(
-                "➕ افزودن به گروه",
-                url=f"https://t.me/{context.bot.username}?startgroup=true"
-            )]
-        ]
+        keyboard = [[InlineKeyboardButton(
+            "➕ افزودن به گروه",
+            url=f"https://t.me/{context.bot.username}?startgroup=true"
+        )]]
 
         await update.message.reply_text(
             "سلام به WOLF ROBAT 🐺\n\n"
@@ -46,45 +75,104 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # اگر گروه بود
     else:
-        keyboard = [
-            [InlineKeyboardButton("🎮 شروع بازی", callback_data="start_game")]
-        ]
+        keyboard = [[InlineKeyboardButton("🎮 شروع بازی", callback_data="create_game")]]
 
         await update.message.reply_text(
-            "برای شروع بازی روی دکمه بزن 👇",
+            "برای ساخت بازی روی دکمه بزن 👇",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# ================= START GAME ================= #
+# ================= CREATE GAME ================= #
 
-async def start_game(update: Update, context):
+async def create_game(update: Update, context):
 
     query = update.callback_query
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await force_join_message(update, context)
+        return
+
     await query.answer()
 
     chat_id = query.message.chat.id
 
-    members = []
-    async for member in context.bot.get_chat_members(chat_id):
-        if not member.user.is_bot:
-            members.append(member.user.id)
-
-    if len(members) < 2:
-        await query.message.reply_text("❌ حداقل ۲ نفر برای شروع بازی لازم است.")
-        return
-
-    if len(members) > MAX_PLAYERS:
-        members = members[:MAX_PLAYERS]
-
     data["rooms"][chat_id] = {
-        "players": members,
-        "scores": {str(uid): 0 for uid in members},
+        "players": [],
+        "scores": {},
         "current": 0,
-        "votes": {"yes": 0, "no": 0}
+        "votes": {"yes": 0, "no": 0},
+        "started": False
     }
 
+    save_data()
+
+    keyboard = [
+        [InlineKeyboardButton("➕ ورود به بازی", callback_data="join_game")],
+        [InlineKeyboardButton("🚀 شروع نهایی", callback_data="final_start")]
+    ]
+
+    await query.message.reply_text(
+        "🎮 بازی ساخته شد!\n\nبازیکنان روی «ورود به بازی» بزنن.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= JOIN GAME ================= #
+
+async def join_game(update: Update, context):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await force_join_message(update, context)
+        return
+
+    await query.answer()
+
+    chat_id = query.message.chat.id
+    room = data["rooms"].get(chat_id)
+
+    if not room or room["started"]:
+        return
+
+    if user_id not in room["players"]:
+
+        if len(room["players"]) >= MAX_PLAYERS:
+            await query.answer("ظرفیت پر شده ❌", show_alert=True)
+            return
+
+        room["players"].append(user_id)
+        room["scores"][str(user_id)] = 0
+        save_data()
+
+        await query.answer("وارد بازی شدی ✅", show_alert=True)
+
+# ================= FINAL START ================= #
+
+async def final_start(update: Update, context):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await force_join_message(update, context)
+        return
+
+    await query.answer()
+
+    chat_id = query.message.chat.id
+    room = data["rooms"].get(chat_id)
+
+    if not room:
+        return
+
+    if len(room["players"]) < 2:
+        await query.answer("حداقل ۲ نفر لازم است ❌", show_alert=True)
+        return
+
+    room["started"] = True
     save_data()
 
     await next_turn(chat_id, context)
@@ -94,7 +182,6 @@ async def start_game(update: Update, context):
 async def next_turn(chat_id, context):
 
     room = data["rooms"][chat_id]
-
     player_id = room["players"][room["current"]]
 
     question = random.choice([
@@ -149,6 +236,17 @@ async def handle_vote(update: Update, context):
         await query.message.reply_text(msg)
         await next_turn(chat_id, context)
 
+# ================= CHECK JOIN BUTTON ================= #
+
+async def check_join(update: Update, context):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if await is_member(user_id, context):
+        await query.answer("عضویت تایید شد ✅", show_alert=True)
+    else:
+        await query.answer("هنوز عضو نشدی ❌", show_alert=True)
+
 # ================= MAIN ================= #
 
 def main():
@@ -156,8 +254,11 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(start_game, pattern="start_game"))
+    app.add_handler(CallbackQueryHandler(create_game, pattern="create_game"))
+    app.add_handler(CallbackQueryHandler(join_game, pattern="join_game"))
+    app.add_handler(CallbackQueryHandler(final_start, pattern="final_start"))
     app.add_handler(CallbackQueryHandler(handle_vote, pattern="vote_"))
+    app.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
     app.run_polling()
 
