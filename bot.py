@@ -69,13 +69,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]]
 
         await update.message.reply_text(
-            "سلام به WOLF ROBAT 🐺\n\n"
-            "خوش اومدی 🎊🎉💥🕺🏻😎\n\n"
-            "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم!",
+            "سلام به WOLF ROBAT 🐺\n\nخوش اومدی 🎊",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     else:
+
         keyboard = [[InlineKeyboardButton("🎮 شروع بازی", callback_data="create_game")]]
 
         await update.message.reply_text(
@@ -114,11 +113,11 @@ async def create_game(update: Update, context):
     ]
 
     await query.message.reply_text(
-        "🎮 بازی ساخته شد!\n\nبازیکنان روی «ورود به بازی» بزنن.",
+        "🎮 بازی ساخته شد!\n\nبازیکنان روی ورود بزنن.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ================= JOIN GAME ================= #
+# ================= JOIN GAME (آپدیت شده حرفه‌ای) ================= #
 
 async def join_game(update: Update, context):
 
@@ -137,17 +136,35 @@ async def join_game(update: Update, context):
     if not room or room["started"]:
         return
 
-    if user_id not in room["players"]:
+    if user_id in room["players"]:
+        await query.answer("قبلاً وارد شدی ✅", show_alert=True)
+        return
 
-        if len(room["players"]) >= MAX_PLAYERS:
-            await query.answer("ظرفیت پر شده ❌", show_alert=True)
-            return
+    if len(room["players"]) >= MAX_PLAYERS:
+        await query.answer("ظرفیت پر شده ❌", show_alert=True)
+        return
 
-        room["players"].append(user_id)
-        room["scores"][str(user_id)] = 0
-        save_data()
+    # ✅ اضافه شدن بازیکن
+    room["players"].append(user_id)
+    room["scores"][str(user_id)] = 0
+    save_data()
 
-        await query.answer("وارد بازی شدی ✅", show_alert=True)
+    players_count = len(room["players"])
+
+    # ✅ آپدیت همون پیام داخل گروه
+    try:
+        await query.message.edit_text(
+            f"🎮 بازی در حال آماده‌سازی...\n\n"
+            f"👤 <a href='tg://user?id={user_id}'>یک بازیکن</a> وارد شد ✅\n\n"
+            f"👥 تعداد بازیکنان: {players_count}/{MAX_PLAYERS}\n\n"
+            "⏳ منتظر بازیکن‌های دیگر هستیم...",
+            parse_mode="HTML",
+            reply_markup=query.message.reply_markup
+        )
+    except:
+        pass
+
+    await query.answer("وارد بازی شدی ✅", show_alert=True)
 
 # ================= FINAL START ================= #
 
@@ -236,9 +253,10 @@ async def handle_vote(update: Update, context):
         await query.message.reply_text(msg)
         await next_turn(chat_id, context)
 
-# ================= CHECK JOIN BUTTON ================= #
+# ================= CHECK JOIN ================= #
 
 async def check_join(update: Update, context):
+
     query = update.callback_query
     user_id = query.from_user.id
 
