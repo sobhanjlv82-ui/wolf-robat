@@ -1,15 +1,13 @@
 import os
 import json
 import random
-import asyncio
 from telegram import *
 from telegram.ext import *
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 DATA_FILE = "group_data.json"
-TURN_TIME = 40
-
+MAX_PLAYERS = 50
 
 # ================= STORAGE ================= #
 
@@ -19,95 +17,83 @@ def load_data():
             return json.load(f)
     return {"rooms": {}}
 
-
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-
 data = load_data()
 
-
-# ================= START (PRIVATE MESSAGE UI) ================= #
+# ================= START ================= #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user = update.effective_user
+    chat = update.effective_chat
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎮 بازی در گروه",
-                url=f"https://t.me/{context.bot.username}?startgroup=true"
-            )
-        ],
-        [
-            InlineKeyboardButton(
+    # اگر پیوی بود
+    if chat.type == "private":
+
+        keyboard = [
+            [InlineKeyboardButton(
                 "➕ افزودن به گروه",
                 url=f"https://t.me/{context.bot.username}?startgroup=true"
-            )
+            )]
         ]
-    ]
 
-    await update.message.reply_text(
-        "سلام به WOLF ROBAT 🐺\n\n"
-        "خوش اومدی 🎊🎉💥🕺🏻😎\n\n"
-        "منو با خودت به گروهت ببر تا بچه‌ها رو سرگرم کنم 🚀",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        await update.message.reply_text(
+            "سلام به WOLF ROBAT 🐺\n\n"
+            "خوش اومدی 🎊🎉💥🕺🏻😎\n\n"
+            "منو با خودت به گروهت ببر تا بچه هارو سرگرم کنم!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
+    # اگر گروه بود
+    else:
+        keyboard = [
+            [InlineKeyboardButton("🎮 شروع بازی", callback_data="start_game")]
+        ]
 
-# ================= WELCOME WHEN BOT ADDED ================= #
+        await update.message.reply_text(
+            "برای شروع بازی روی دکمه بزن 👇",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-async def welcome(update: Update, context):
-
-    for member in update.message.new_chat_members:
-        if member.id == context.bot.id:
-            await update.message.reply_text(
-                "🎉 سلام گروه!\n\n"
-                "من آماده‌ام بازی جرئت و حقیقت رو شروع کنم 😎\n\n"
-                "برای شروع بنویسید:\n/startgame"
-            )
-
-
-# ================= START GAME (GROUP ONLY) ================= #
+# ================= START GAME ================= #
 
 async def start_game(update: Update, context):
 
-    chat_id = update.effective_chat.id
+    query = update.callback_query
+    await query.answer()
 
-    if chat_id not in data["rooms"]:
-        data["rooms"][chat_id] = {
-            "players": [],
-            "scores": {},
-            "current": 0
-        }
+    chat_id = query.message.chat.id
 
-    room = data["rooms"][chat_id]
-
-    # جمع کردن اعضای گروه
     members = []
-    async for member in context.bot.get_chat_administrators(chat_id):
-        members.append(member.user.id)
+    async for member in context.bot.get_chat_members(chat_id):
+        if not member.user.is_bot:
+            members.append(member.user.id)
 
-    room["players"] = members
-    for uid in members:
-        if str(uid) not in room["scores"]:
-            room["scores"][str(uid)] = 0
+    if len(members) < 2:
+        await query.message.reply_text("❌ حداقل ۲ نفر برای شروع بازی لازم است.")
+        return
+
+    if len(members) > MAX_PLAYERS:
+        members = members[:MAX_PLAYERS]
+
+    data["rooms"][chat_id] = {
+        "players": members,
+        "scores": {str(uid): 0 for uid in members},
+        "current": 0,
+        "votes": {"yes": 0, "no": 0}
+    }
 
     save_data()
 
     await next_turn(chat_id, context)
-
 
 # ================= NEXT TURN ================= #
 
 async def next_turn(chat_id, context):
 
     room = data["rooms"][chat_id]
-
-    if not room["players"]:
-        return
 
     player_id = room["players"][room["current"]]
 
@@ -129,51 +115,51 @@ async def next_turn(chat_id, context):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 # ================= VOTE ================= #
 
 async def handle_vote(update: Update, context):
 
     query = update.callback_query
+    await query.answer()
+
     _, vote_type, chat_id = query.data.split("_")
-
     chat_id = int(chat_id)
-    room = data["rooms"].get(chat_id)
 
+    room = data["rooms"].get(chat_id)
     if not room:
         return
 
-    if "votes" not in room:
-        room["votes"] = {"yes": 0, "no": 0}
-
     room["votes"][vote_type] += 1
-    save_data()
 
-    await query.answer("رأی ثبت شد ✅")
+    total_votes = room["votes"]["yes"] + room["votes"]["no"]
 
+    if total_votes >= len(room["players"]):
 
-# ================= HANDLER ================= #
+        if room["votes"]["yes"] > room["votes"]["no"]:
+            player_id = room["players"][room["current"]]
+            room["scores"][str(player_id)] += 1
+            msg = "🔥 قبول شد! +1 امتیاز"
+        else:
+            msg = "⛔ رأی منفی بیشتر بود! حکم اجرا میشه 😈"
 
-async def message_handler(update: Update, context):
+        room["votes"] = {"yes": 0, "no": 0}
+        room["current"] = (room["current"] + 1) % len(room["players"])
+        save_data()
 
-    if update.message.new_chat_members:
-        await welcome(update, context)
+        await query.message.reply_text(msg)
+        await next_turn(chat_id, context)
 
-    if update.message.text == "/startgame":
-        await start_game(update, context)
-
+# ================= MAIN ================= #
 
 def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    app.add_handler(CallbackQueryHandler(handle_vote))
+    app.add_handler(CallbackQueryHandler(start_game, pattern="start_game"))
+    app.add_handler(CallbackQueryHandler(handle_vote, pattern="vote_"))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
